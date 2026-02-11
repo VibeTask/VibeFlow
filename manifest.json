@@ -1,0 +1,21 @@
+{
+  "name": "TaskFlow",
+  "short_name": "TaskFlow",
+  "description": "Task manager organized by people and projects",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fdfdfc",
+  "theme_color": "#fdfdfc",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
