@@ -421,10 +421,12 @@ function TaskRow({ task, expanded, isMobile, draggable, isDragging, isDragOver, 
   const [editingTitle, setEditingTitle] = useState(false);
   const [localTitle, setLocalTitle] = useState(task.title);
   const [editingNotes, setEditingNotes] = useState(false);
+  const [localNotes, setLocalNotes] = useState(task.notes || "");
   const titleRef = useRef(null);
   const noteRef = useRef(null);
 
   useEffect(() => { setLocalTitle(task.title); }, [task.title]);
+  useEffect(() => { if (!editingNotes) setLocalNotes(task.notes || ""); }, [task.notes, editingNotes]);
   useEffect(() => { if (editingTitle && titleRef.current) titleRef.current.focus(); }, [editingTitle]);
   useEffect(() => { if (editingNotes && noteRef.current) { noteRef.current.focus(); noteRef.current.selectionStart = noteRef.current.value.length; } }, [editingNotes]);
 
@@ -491,10 +493,10 @@ function TaskRow({ task, expanded, isMobile, draggable, isDragging, isDragOver, 
           {expanded && (
             <div style={{ marginTop: 10, animation: "appear 0.12s ease", display: "flex", flexDirection: "column", gap: 8 }}>
               {editingNotes ? (
-                <textarea ref={noteRef} value={task.notes || ""} onChange={e => onUpdate({ notes: e.target.value })}
-                  onBlur={() => setEditingNotes(false)}
-                  onKeyDown={e => { if (e.key === "Escape") setEditingNotes(false); }}
-                  rows={Math.max(2, ((task.notes || "").match(/\n/g) || []).length + 2)}
+                <textarea ref={noteRef} value={localNotes} onChange={e => setLocalNotes(e.target.value)}
+                  onBlur={() => { onUpdate({ notes: localNotes }); setEditingNotes(false); }}
+                  onKeyDown={e => { if (e.key === "Escape") { onUpdate({ notes: localNotes }); setEditingNotes(false); } }}
+                  rows={Math.max(2, (localNotes.match(/\n/g) || []).length + 2)}
                   placeholder="Add a note..."
                   style={{ width: "100%", padding: "8px 10px", borderRadius: 5, border: "1px solid #ddd9d3", fontSize: isMobile ? 15 : 13, lineHeight: 1.55, outline: "none", background: "#fafaf8", color: "#4a4a46" }} />
               ) : (
