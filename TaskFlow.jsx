@@ -29,6 +29,7 @@ function useIsMobile() {
 export default function TaskFlow({ session }) {
   const [groups, setGroups] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [attachments, setAttachments] = useState([]);
   const [selected, setSelected] = useState(null);
   const [expandedTask, setExpandedTask] = useState(null);
   const [showDone, setShowDone] = useState({});
@@ -51,12 +52,14 @@ export default function TaskFlow({ session }) {
 
   useEffect(() => {
     const load = async () => {
-      const [{ data: g }, { data: t }] = await Promise.all([
+      const [{ data: g }, { data: t }, { data: a }] = await Promise.all([
         supabase.from("groups").select("*").eq("user_id", userId).order("created_at"),
         supabase.from("tasks").select("*").eq("user_id", userId).order("position"),
+        supabase.from("attachments").select("*").eq("user_id", userId).order("created_at"),
       ]);
       setGroups(g || []);
       setTasks(t || []);
+      setAttachments(a || []);
       setLoaded(true);
     };
     load();
@@ -128,6 +131,16 @@ export default function TaskFlow({ session }) {
     const task = tasks.find(t => t.id === id);
     if (!task) return;
     const done = !task.done;
+    // Delete attachments when completing a task
+    if (done) {
+      const taskAttachments = attachments.filter(a => a.task_id === id);
+      if (taskAttachments.length > 0) {
+        const paths = taskAttachments.map(a => a.file_path);
+        await supabase.storage.from("attachments").remove(paths);
+        await supabase.from("attachments").delete().eq("task_id", id);
+        setAttachments(prev => prev.filter(a => a.task_id !== id));
+      }
+    }
     await supabase.from("tasks").update({ done }).eq("id", id);
     setTasks(prev => prev.map(t => t.id === id ? { ...t, done } : t));
   };
@@ -144,9 +157,46 @@ export default function TaskFlow({ session }) {
   };
 
   const removeTask = async (id) => {
+    // Also clean up any attachments
+    const taskAttachments = attachments.filter(a => a.task_id === id);
+    if (taskAttachments.length > 0) {
+      const paths = taskAttachments.map(a => a.file_path);
+      await supabase.storage.from("attachments").remove(paths);
+      await supabase.from("attachments").delete().eq("task_id", id);
+      setAttachments(prev => prev.filter(a => a.task_id !== id));
+    }
     await supabase.from("tasks").delete().eq("id", id);
     setTasks(prev => prev.filter(t => t.id !== id));
     setExpandedTask(null);
+  };
+
+  const uploadAttachment = async (taskId, file) => {
+    const filePath = `${userId}/${taskId}/${Date.now()}-${file.name}`;
+    const { error: uploadError } = await supabase.storage.from("attachments").upload(filePath, file);
+    if (uploadError) { console.error("Upload failed:", uploadError); return; }
+    const { data, error } = await supabase.from("attachments").insert({
+      user_id: userId, task_id: taskId, file_name: file.name, file_path: filePath, file_size: file.size,
+    }).select().single();
+    if (!error && data) setAttachments(prev => [...prev, data]);
+  };
+
+  const deleteAttachment = async (attachmentId) => {
+    const att = attachments.find(a => a.id === attachmentId);
+    if (!att) return;
+    await supabase.storage.from("attachments").remove([att.file_path]);
+    await supabase.from("attachments").delete().eq("id", attachmentId);
+    setAttachments(prev => prev.filter(a => a.id !== attachmentId));
+  };
+
+  const getAttachmentUrl = (filePath) => {
+    const { data } = supabase.storage.from("attachments").getPublicUrl(filePath);
+    // For private buckets, use createSignedUrl instead
+    return null; // Will use signed URLs
+  };
+
+  const openAttachment = async (filePath) => {
+    const { data, error } = await supabase.storage.from("attachments").createSignedUrl(filePath, 3600);
+    if (!error && data?.signedUrl) window.open(data.signedUrl, "_blank");
   };
 
   const activeCount = (gid) => tasks.filter(t => t.group_id === gid && !t.done && !isFuture(t.activate_date)).length;
@@ -355,7 +405,11 @@ export default function TaskFlow({ session }) {
                   onToggle={() => toggleDone(task.id)}
                   onExpand={() => setExpandedTask(expandedTask === task.id ? null : task.id)}
                   onUpdate={(u) => updateTask(task.id, u)}
-                  onRemove={() => removeTask(task.id)} />
+                  onRemove={() => removeTask(task.id)}
+                  attachments={attachments.filter(a => a.task_id === task.id)}
+                  onUpload={(file) => uploadAttachment(task.id, file)}
+                  onDeleteAttachment={deleteAttachment}
+                  onOpenAttachment={openAttachment} />
               ))}
 
               {addingTask ? (
@@ -388,7 +442,11 @@ export default function TaskFlow({ session }) {
                       onToggle={() => toggleDone(task.id)}
                       onExpand={() => setExpandedTask(expandedTask === task.id ? null : task.id)}
                       onUpdate={(u) => updateTask(task.id, u)}
-                      onRemove={() => removeTask(task.id)} />
+                      onRemove={() => removeTask(task.id)}
+                      attachments={attachments.filter(a => a.task_id === task.id)}
+                      onUpload={(file) => uploadAttachment(task.id, file)}
+                      onDeleteAttachment={deleteAttachment}
+                      onOpenAttachment={openAttachment} />
                   ))}
                 </div>
               )}
@@ -405,7 +463,11 @@ export default function TaskFlow({ session }) {
                       onToggle={() => toggleDone(task.id)}
                       onExpand={() => setExpandedTask(expandedTask === task.id ? null : task.id)}
                       onUpdate={(u) => updateTask(task.id, u)}
-                      onRemove={() => removeTask(task.id)} />
+                      onRemove={() => removeTask(task.id)}
+                      attachments={attachments.filter(a => a.task_id === task.id)}
+                      onUpload={(file) => uploadAttachment(task.id, file)}
+                      onDeleteAttachment={deleteAttachment}
+                      onOpenAttachment={openAttachment} />
                   ))}
                 </div>
               )}
@@ -417,13 +479,15 @@ export default function TaskFlow({ session }) {
   );
 }
 
-function TaskRow({ task, expanded, isMobile, draggable, isDragging, isDragOver, onDragStart, onDragOver, onDragEnd, onDrop, onToggle, onExpand, onUpdate, onRemove }) {
+function TaskRow({ task, expanded, isMobile, draggable, isDragging, isDragOver, onDragStart, onDragOver, onDragEnd, onDrop, onToggle, onExpand, onUpdate, onRemove, attachments = [], onUpload, onDeleteAttachment, onOpenAttachment }) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [localTitle, setLocalTitle] = useState(task.title);
   const [editingNotes, setEditingNotes] = useState(false);
   const [localNotes, setLocalNotes] = useState(task.notes || "");
+  const [uploading, setUploading] = useState(false);
   const titleRef = useRef(null);
   const noteRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => { setLocalTitle(task.title); }, [task.title]);
   useEffect(() => { if (!editingNotes) setLocalNotes(task.notes || ""); }, [task.notes, editingNotes]);
@@ -435,7 +499,7 @@ function TaskRow({ task, expanded, isMobile, draggable, isDragging, isDragOver, 
   const dueDate = task.due_date || "";
   const hasActivateDate = !!activateDate;
   const hasDueDate = !!dueDate;
-  const hasDetails = hasNotes || hasActivateDate || hasDueDate;
+  const hasDetails = hasNotes || hasActivateDate || hasDueDate || attachments.length > 0;
   const isScheduled = isFuture(activateDate);
 
   const dueDays = daysUntil(dueDate);
@@ -526,6 +590,35 @@ function TaskRow({ task, expanded, isMobile, draggable, isDragging, isDragOver, 
                       style={{ background: "none", border: "none", fontSize: 14, color: "#c8c4be", padding: "4px 6px", lineHeight: 1 }}>×</button>
                   )}
                 </div>
+              </div>
+              {/* Attachments */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {attachments.map(att => (
+                  <div key={att.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
+                    <span style={{ fontSize: 13, color: "#4a9cc4", cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}
+                      onClick={() => onOpenAttachment(att.file_path)}>
+                      📎 {att.file_name}
+                    </span>
+                    <span style={{ fontSize: 11, color: "#b0aca6", flexShrink: 0 }}>
+                      {att.file_size < 1024 ? `${att.file_size} B` : att.file_size < 1048576 ? `${(att.file_size / 1024).toFixed(0)} KB` : `${(att.file_size / 1048576).toFixed(1)} MB`}
+                    </span>
+                    <button onClick={() => onDeleteAttachment(att.id)}
+                      style={{ background: "none", border: "none", fontSize: 13, color: "#c8c4be", padding: "2px 4px", lineHeight: 1, flexShrink: 0 }}>×</button>
+                  </div>
+                ))}
+                <input ref={fileInputRef} type="file" style={{ display: "none" }}
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    setUploading(true);
+                    await onUpload(file);
+                    setUploading(false);
+                    e.target.value = "";
+                  }} />
+                <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
+                  style={{ alignSelf: "flex-start", padding: "5px 10px", borderRadius: 5, border: "1px solid #e0ddd8", background: "#fafaf8", color: uploading ? "#b0aca6" : "#6b5d4e", fontSize: 12, display: "flex", alignItems: "center", gap: 5 }}>
+                  {uploading ? "Uploading..." : "📎 Attach file"}
+                </button>
               </div>
               {/* Delete task button - easier to reach on mobile */}
               <button onClick={onRemove}
