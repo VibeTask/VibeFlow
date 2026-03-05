@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import { supabase } from "./supabaseClient";
 
 const today = () => { const d = new Date(); return d.toISOString().split("T")[0]; };
@@ -40,10 +40,11 @@ export default function TaskFlow({ session }) {
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [showArchive, setShowArchive] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
-  const [dragId, setDragId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const dragIdRef = useRef(null);
+  const [, forceRender] = useState(0);
   const groupInputRef = useRef(null);
   const taskInputRef = useRef(null);
   const isMobile = useIsMobile();
@@ -201,23 +202,46 @@ export default function TaskFlow({ session }) {
 
   const activeCount = (gid) => tasks.filter(t => t.group_id === gid && !t.done && !isFuture(t.activate_date)).length;
 
-  const handleDragStart = (e, id) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", id); setDragId(id); };
+  const handleDragStart = (e, id) => {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", id);
+    dragIdRef.current = id;
+    forceRender(n => n + 1);
+  };
   const handleDragOver = (e, id) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (id !== dragOverId) setDragOverId(id); };
-  const handleDragEnd = () => { setDragId(null); setDragOverId(null); };
-  const handleDrop = useCallback(async (targetId) => {
-    if (dragId === null || dragId === targetId) { setDragId(null); setDragOverId(null); return; }
+  const handleDragEnd = () => { dragIdRef.current = null; setDragOverId(null); forceRender(n => n + 1); };
+  const handleDrop = async (e, targetId) => {
+    e.preventDefault();
+    const sourceId = dragIdRef.current;
+    dragIdRef.current = null;
+    setDragOverId(null);
+    forceRender(n => n + 1);
+    if (!sourceId || sourceId === targetId) return;
     const currentActive = [...activeTasks];
-    const fromIdx = currentActive.findIndex(t => t.id === dragId);
+    const fromIdx = currentActive.findIndex(t => t.id === sourceId);
     const toIdx = currentActive.findIndex(t => t.id === targetId);
-    if (fromIdx === -1 || toIdx === -1) { setDragId(null); setDragOverId(null); return; }
+    if (fromIdx === -1 || toIdx === -1) return;
     const [moved] = currentActive.splice(fromIdx, 1);
     currentActive.splice(toIdx, 0, moved);
     const updates = currentActive.map((t, i) => ({ id: t.id, position: i }));
     const newTasks = tasks.map(t => { const u = updates.find(u => u.id === t.id); return u ? { ...t, position: u.position } : t; });
     setTasks(newTasks);
-    setDragId(null); setDragOverId(null);
     for (const u of updates) { await supabase.from("tasks").update({ position: u.position }).eq("id", u.id); }
-  }, [dragId, activeTasks, tasks]);
+  };
+
+  const moveTask = async (taskId, direction) => {
+    const currentActive = [...activeTasks];
+    const idx = currentActive.findIndex(t => t.id === taskId);
+    if (idx === -1) return;
+    const newIdx = idx + direction;
+    if (newIdx < 0 || newIdx >= currentActive.length) return;
+    const [moved] = currentActive.splice(idx, 1);
+    currentActive.splice(newIdx, 0, moved);
+    const updates = currentActive.map((t, i) => ({ id: t.id, position: i }));
+    const newTasks = tasks.map(t => { const u = updates.find(u => u.id === t.id); return u ? { ...t, position: u.position } : t; });
+    setTasks(newTasks);
+    for (const u of updates) { await supabase.from("tasks").update({ position: u.position }).eq("id", u.id); }
+  };
 
   const longPressTimer = useRef(null);
   const startLongPress = (id, e) => { longPressTimer.current = setTimeout(() => { const r = e.currentTarget.getBoundingClientRect(); setContextMenu({ id, x: r.right - 20, y: r.bottom }); }, 500); };
@@ -393,15 +417,15 @@ export default function TaskFlow({ session }) {
             {/* Tasks */}
             <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "12px 16px 32px" : "16px 40px 40px", WebkitOverflowScrolling: "touch" }}>
 
-              {activeTasks.map(task => (
+              {activeTasks.map((task, idx) => (
                 <TaskRow key={task.id} task={task} expanded={expandedTask === task.id} isMobile={isMobile}
                   draggable={!isMobile}
-                  isDragging={dragId === task.id}
-                  isDragOver={dragOverId === task.id && dragId !== task.id}
+                  isDragging={dragIdRef.current === task.id}
+                  isDragOver={dragOverId === task.id && dragIdRef.current !== task.id}
                   onDragStart={(e) => handleDragStart(e, task.id)}
                   onDragOver={(e) => handleDragOver(e, task.id)}
                   onDragEnd={handleDragEnd}
-                  onDrop={(e) => { e.preventDefault(); handleDrop(task.id); }}
+                  onDrop={(e) => handleDrop(e, task.id)}
                   onToggle={() => toggleDone(task.id)}
                   onExpand={() => setExpandedTask(expandedTask === task.id ? null : task.id)}
                   onUpdate={(u) => updateTask(task.id, u)}
@@ -409,7 +433,11 @@ export default function TaskFlow({ session }) {
                   attachments={attachments.filter(a => a.task_id === task.id)}
                   onUpload={(file) => uploadAttachment(task.id, file)}
                   onDeleteAttachment={deleteAttachment}
-                  onOpenAttachment={openAttachment} />
+                  onOpenAttachment={openAttachment}
+                  canMoveUp={idx > 0}
+                  canMoveDown={idx < activeTasks.length - 1}
+                  onMoveUp={() => moveTask(task.id, -1)}
+                  onMoveDown={() => moveTask(task.id, 1)} />
               ))}
 
               {addingTask ? (
@@ -479,7 +507,7 @@ export default function TaskFlow({ session }) {
   );
 }
 
-function TaskRow({ task, expanded, isMobile, draggable, isDragging, isDragOver, onDragStart, onDragOver, onDragEnd, onDrop, onToggle, onExpand, onUpdate, onRemove, attachments = [], onUpload, onDeleteAttachment, onOpenAttachment }) {
+function TaskRow({ task, expanded, isMobile, draggable, isDragging, isDragOver, onDragStart, onDragOver, onDragEnd, onDrop, onToggle, onExpand, onUpdate, onRemove, attachments = [], onUpload, onDeleteAttachment, onOpenAttachment, canMoveUp, canMoveDown, onMoveUp, onMoveDown }) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [localTitle, setLocalTitle] = useState(task.title);
   const [editingNotes, setEditingNotes] = useState(false);
@@ -620,6 +648,19 @@ function TaskRow({ task, expanded, isMobile, draggable, isDragging, isDragOver, 
                   {uploading ? "Uploading..." : "📎 Attach file"}
                 </button>
               </div>
+              {/* Reorder buttons on mobile */}
+              {isMobile && (onMoveUp || onMoveDown) && (
+                <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                  <button onClick={onMoveUp} disabled={!canMoveUp}
+                    style={{ padding: "6px 14px", borderRadius: 5, border: "1px solid #e0ddd8", background: "#fafaf8", color: canMoveUp ? "#6b5d4e" : "#d4d1cc", fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
+                    ↑ Move up
+                  </button>
+                  <button onClick={onMoveDown} disabled={!canMoveDown}
+                    style={{ padding: "6px 14px", borderRadius: 5, border: "1px solid #e0ddd8", background: "#fafaf8", color: canMoveDown ? "#6b5d4e" : "#d4d1cc", fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
+                    ↓ Move down
+                  </button>
+                </div>
+              )}
               {/* Delete task button - easier to reach on mobile */}
               <button onClick={onRemove}
                 style={{ alignSelf: "flex-start", padding: "6px 12px", borderRadius: 5, border: "1px solid #e8d4d4", background: "#fdf8f7", color: "#c47a6a", fontSize: 12, marginTop: 4 }}>
