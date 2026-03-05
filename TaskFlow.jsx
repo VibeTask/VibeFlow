@@ -201,8 +201,8 @@ export default function TaskFlow({ session }) {
 
   const activeCount = (gid) => tasks.filter(t => t.group_id === gid && !t.done && !isFuture(t.activate_date)).length;
 
-  const handleDragStart = (id) => setDragId(id);
-  const handleDragOver = (e, id) => { e.preventDefault(); if (id !== dragOverId) setDragOverId(id); };
+  const handleDragStart = (e, id) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", id); setDragId(id); };
+  const handleDragOver = (e, id) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (id !== dragOverId) setDragOverId(id); };
   const handleDragEnd = () => { setDragId(null); setDragOverId(null); };
   const handleDrop = useCallback(async (targetId) => {
     if (dragId === null || dragId === targetId) { setDragId(null); setDragOverId(null); return; }
@@ -398,7 +398,7 @@ export default function TaskFlow({ session }) {
                   draggable={!isMobile}
                   isDragging={dragId === task.id}
                   isDragOver={dragOverId === task.id && dragId !== task.id}
-                  onDragStart={() => handleDragStart(task.id)}
+                  onDragStart={(e) => handleDragStart(e, task.id)}
                   onDragOver={(e) => handleDragOver(e, task.id)}
                   onDragEnd={handleDragEnd}
                   onDrop={(e) => { e.preventDefault(); handleDrop(task.id); }}
