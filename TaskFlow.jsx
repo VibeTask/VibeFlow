@@ -78,7 +78,7 @@ export default function TaskFlow({ session }) {
   const archivedGroups = groups.filter(g => g.archived);
   const selectedGroup = groups.find(g => g.id === selected);
   const groupTasks = selected ? tasks.filter(t => t.group_id === selected) : [];
-  const activeTasks = groupTasks.filter(t => !t.done && !isFuture(t.activate_date)).sort((a, b) => (a.position || 0) - (b.position || 0));
+  const activeTasks = groupTasks.filter(t => !t.done && !isFuture(t.activate_date));
   const scheduledTasks = groupTasks.filter(t => !t.done && isFuture(t.activate_date)).sort((a, b) => (a.activate_date || "").localeCompare(b.activate_date || ""));
   const doneTasks = groupTasks.filter(t => t.done);
   const isDoneVisible = showDone[selected] || false;
@@ -210,69 +210,37 @@ export default function TaskFlow({ session }) {
   };
   const handleDragOver = (e, id) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (id !== dragOverId) setDragOverId(id); };
   const handleDragEnd = () => { dragIdRef.current = null; setDragOverId(null); forceRender(n => n + 1); };
-  const reorderTasks = (getNewOrder) => {
-    setTasks(prev => {
-      const newTasks = [...prev];
-      // Get active tasks for current group with their indices in the main array
-      const activeItems = newTasks
-        .map((t, i) => ({ task: t, idx: i }))
-        .filter(({ task: t }) => t.group_id === selected && !t.done && !isFuture(t.activate_date))
-        .sort((a, b) => (a.task.position || 0) - (b.task.position || 0));
-
-      if (activeItems.length < 2) return prev;
-
-      // First normalize: assign unique sequential positions to break any ties
-      activeItems.forEach(({ idx }, i) => {
-        newTasks[idx] = { ...newTasks[idx], position: i };
-      });
-
-      // Apply the reorder
-      const reordered = getNewOrder(activeItems.map(({ idx }) => newTasks[idx]));
-      if (!reordered) return prev;
-
-      // Write new positions
-      reordered.forEach((t, i) => {
-        const mainIdx = newTasks.findIndex(nt => nt.id === t.id);
-        if (mainIdx !== -1) newTasks[mainIdx] = { ...newTasks[mainIdx], position: i };
-      });
-
-      // Persist to database in background
-      reordered.forEach((t, i) => {
-        supabase.from("tasks").update({ position: i }).eq("id", t.id);
-      });
-
-      return newTasks;
-    });
-  };
-
-  const handleDrop = (e, targetId) => {
+  const handleDrop = async (e, targetId) => {
     e.preventDefault();
     const sourceId = dragIdRef.current;
     dragIdRef.current = null;
     setDragOverId(null);
     forceRender(n => n + 1);
     if (!sourceId || sourceId === targetId) return;
-    reorderTasks((list) => {
-      const fromIdx = list.findIndex(t => t.id === sourceId);
-      const toIdx = list.findIndex(t => t.id === targetId);
-      if (fromIdx === -1 || toIdx === -1) return null;
-      const reordered = [...list];
-      const [moved] = reordered.splice(fromIdx, 1);
-      reordered.splice(toIdx, 0, moved);
-      return reordered;
-    });
+    const currentActive = [...activeTasks];
+    const fromIdx = currentActive.findIndex(t => t.id === sourceId);
+    const toIdx = currentActive.findIndex(t => t.id === targetId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const [moved] = currentActive.splice(fromIdx, 1);
+    currentActive.splice(toIdx, 0, moved);
+    const updates = currentActive.map((t, i) => ({ id: t.id, position: i }));
+    const newTasks = tasks.map(t => { const u = updates.find(u => u.id === t.id); return u ? { ...t, position: u.position } : t; });
+    setTasks(newTasks);
+    for (const u of updates) { await supabase.from("tasks").update({ position: u.position }).eq("id", u.id); }
   };
 
-  const moveTask = (taskId, direction) => {
-    reorderTasks((list) => {
-      const idx = list.findIndex(t => t.id === taskId);
-      if (idx === -1) return null;
-      const newIdx = idx + direction;
-      if (newIdx < 0 || newIdx >= list.length) return null;
-      const reordered = [...list];
-      [reordered[idx], reordered[newIdx]] = [reordered[newIdx], reordered[idx]];
-      return reordered;
-    });
+  const moveTask = async (taskId, direction) => {
+    const currentActive = [...activeTasks];
+    const idx = currentActive.findIndex(t => t.id === taskId);
+    if (idx === -1) return;
+    const newIdx = idx + direction;
+    if (newIdx < 0 || newIdx >= currentActive.length) return;
+    const [moved] = currentActive.splice(idx, 1);
+    currentActive.splice(newIdx, 0, moved);
+    const updates = currentActive.map((t, i) => ({ id: t.id, position: i }));
+    const newTasks = tasks.map(t => { const u = updates.find(u => u.id === t.id); return u ? { ...t, position: u.position } : t; });
+    setTasks(newTasks);
+    for (const u of updates) { await supabase.from("tasks").update({ position: u.position }).eq("id", u.id); }
   };
 
   const longPressTimer = useRef(null);
