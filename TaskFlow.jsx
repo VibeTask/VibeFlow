@@ -401,7 +401,7 @@ export default function TaskFlow({ session }) {
                   onDragStart={() => handleDragStart(task.id)}
                   onDragOver={(e) => handleDragOver(e, task.id)}
                   onDragEnd={handleDragEnd}
-                  onDrop={() => handleDrop(task.id)}
+                  onDrop={(e) => { e.preventDefault(); handleDrop(task.id); }}
                   onToggle={() => toggleDone(task.id)}
                   onExpand={() => setExpandedTask(expandedTask === task.id ? null : task.id)}
                   onUpdate={(u) => updateTask(task.id, u)}
